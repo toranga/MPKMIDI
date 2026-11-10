@@ -120,7 +120,7 @@ function noteOn(note, vel){
   const oscs = [];
   const mk = (type, det, mult=1) => { const o = ctx.createOscillator(); o.type=type; o.frequency.value = mtof(note)*mult; o.detune.value = det + bend*200; o.connect(g); o.start(t); oscs.push(o); return o; };
   if(wave==='epiano'){
-    mk('sine',0); const o2 = mk('sine',0,2); 
+    mk('sine',0); const o2 = mk('sine',0,2);
     const g2 = ctx.createGain(); o2.disconnect(); o2.connect(g2); g2.connect(g); g2.gain.setValueAtTime(0.5,t); g2.gain.exponentialRampToValueAtTime(0.01,t+1.2);
     g.gain.setValueAtTime(amp*1.4,t); g.gain.exponentialRampToValueAtTime(amp*0.3,t+1.5);
   } else {
