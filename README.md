@@ -21,6 +21,14 @@ A browser-based synth and drum player for the **AKAI MPK mini**, built on the We
 | Joystick Y / CC1 | Vibrato |
 | Sustain pedal (CC64) | Sustain |
 
+## Sequencer
+
+A one-bar 4/4 step sequencer (16 sixteenth-note steps) under the keyboard:
+
+- **Notes grid**: 13 rows (one octave plus the top note). Pick the octave with *Notes octave*. Cells next to each other in a row play as one longer note.
+- **Drums grid**: the 8 on-screen drums.
+- Click or drag to draw, **Space** or the button to play/stop, set the tempo in BPM. The pattern is saved in the browser.
+
 ### Pads not making sound?
 
 - Make sure the **CC** and **PROG CHANGE** buttons on the MPK are off, so the pads send notes.
