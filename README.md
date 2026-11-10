@@ -21,4 +21,10 @@ A browser-based synth and drum player for the **AKAI MPK mini**, built on the We
 | Joystick Y / CC1 | Vibrato |
 | Sustain pedal (CC64) | Sustain |
 
+### Pads not making sound?
+
+- Make sure the **CC** and **PROG CHANGE** buttons on the MPK are off, so the pads send notes.
+- Click **Learn pads**, click a drum on screen, then hit a pad on your MPK. Repeat for each pad, then click **Done**. Your mapping is saved in the browser.
+- If your keys use a channel other than 1, set **Keys channel** in the top bar.
+
 The MIDI monitor panel shows every message the controller sends, which helps when mapping other models or custom presets.

@@ -22,6 +22,9 @@
   #pads{display:grid;grid-template-columns:repeat(4,72px);gap:10px}
   .pad{height:72px;border-radius:8px;background:#2a2d34;border:1px solid #383c45;display:flex;align-items:flex-end;justify-content:center;padding:6px;font-size:11px;color:var(--dim);user-select:none;cursor:pointer;transition:background .05s}
   .pad.hit{background:var(--acc);color:#fff}
+  .pad.target{outline:2px solid var(--ok)}
+  body.learning .pad{border-color:var(--ok)}
+  button.on{background:var(--ok);border-color:var(--ok);color:#000}
   #knobs{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;flex:1;min-width:280px}
   .knob{text-align:center}
   .knob .ring{width:54px;height:54px;margin:0 auto 6px;border-radius:50%;background:conic-gradient(var(--acc) var(--p,0%),#2a2d34 0)}
@@ -59,12 +62,20 @@
       <option value="epiano">E-piano</option>
     </select>
   </label>
+  <label style="margin:0">Keys channel
+    <select id="keysch"></select>
+  </label>
 </header>
 
 <main>
   <div style="display:flex;flex-direction:column;gap:20px">
     <div class="row">
-      <div class="card"><h2>Pads (drums)</h2><div id="pads"></div></div>
+      <div class="card"><h2>Pads (drums)</h2><div id="pads"></div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button id="learn">Learn pads</button><button id="resetpads">Reset</button>
+        </div>
+        <p id="learnhelp" style="color:var(--dim);font-size:12px;max-width:318px;margin:8px 0 0">Pads silent? Turn off the CC button on the MPK, or press Learn pads, click a drum here, then hit the pad on your MPK.</p>
+      </div>
       <div class="card" style="flex:1"><h2>Knobs</h2><div id="knobs"></div></div>
     </div>
     <div class="card"><h2>Keys</h2><div id="kb"></div>
@@ -182,13 +193,31 @@ function drum(i, vel){
 // MPK mini mk3 defaults: keys ch1, pads ch10 notes 36-51 (bank A 36-43, bank B 44-51),
 // knobs CC70-77, sustain CC64, joystick = pitch bend (X) / CC1 (Y). mk2 pads also send notes ~36+ on ch10.
 const PAD_BASE = 36;
+// Pad routing. Pads are recognised in this order:
+//  1. a note you mapped with "Learn pads" (any channel), saved in the browser
+//  2. any note on a channel other than the keys channel (MPK pads usually send on ch10)
+//  3. Program Change messages (PROG CHANGE mode on the MPK): program 0-15 -> drum 0-15
+let padMap = {}; // "ch:note" -> drum index
+try{ padMap = JSON.parse(localStorage.getItem('mpk-padmap')||'{}'); }catch(_){}
+let learnTarget = null; // drum index waiting for a hardware pad hit
+const keysCh = () => +document.getElementById('keysch').value;
+const padFor = (ch, note) => {
+  const k = ch+':'+note;
+  if(k in padMap) return padMap[k];
+  if(ch !== keysCh()) return (((note - PAD_BASE) % 16) + 16) % 16;
+  return null;
+};
 function handleMIDI(e){
   const [st, d1, d2] = e.data, cmd = st & 0xf0, ch = (st & 0x0f) + 1;
   log(e.data, ch);
   if(cmd===0x90 && d2>0){
-    if(ch===10) drum(d1 - PAD_BASE < 0 ? d1 : d1 - PAD_BASE, d2); else noteOn(d1, d2);
+    if(learnTarget!==null){ padMap[ch+':'+d1] = learnTarget; savePads(); drum(learnTarget, d2); setLearn(null); return; }
+    const p = padFor(ch, d1);
+    if(p!==null) drum(p, d2); else noteOn(d1, d2);
   } else if(cmd===0x80 || (cmd===0x90 && d2===0)){
-    if(ch!==10) noteOff(d1);
+    if(padFor(ch, d1)===null) noteOff(d1);
+  } else if(cmd===0xC0){
+    drum(d1 % 16, 100);
   } else if(cmd===0xB0){
     if(d1===64){ sustain = d2>=64; if(!sustain) [...sustained].forEach(n=>{ noteOff(n); }); }
     else if(d1===1){ mod = d2/127; updateMod(); }
@@ -230,7 +259,27 @@ async function initMIDI(){
 // ---------- UI ----------
 const padsEl = document.getElementById('pads');
 // MPK layout: bottom row = pads 1-4, so render top row first
-[4,5,6,7,0,1,2,3].forEach(i=>{ const d = document.createElement('div'); d.className='pad'; d.dataset.i=i; d.textContent=DRUMS[i]; d.onpointerdown=()=>drum(i,110); padsEl.appendChild(d); });
+[4,5,6,7,0,1,2,3].forEach(i=>{ const d = document.createElement('div'); d.className='pad'; d.dataset.i=i; d.textContent=DRUMS[i]; d.onpointerdown=()=>{ if(learnMode) setLearn(i); else drum(i,110); }; padsEl.appendChild(d); });
+let learnMode = false;
+const learnBtn = document.getElementById('learn'), learnHelp = document.getElementById('learnhelp');
+const LEARN_IDLE = learnHelp.textContent;
+function setLearn(i){
+  learnTarget = i;
+  document.querySelectorAll('.pad').forEach(p=>p.classList.toggle('target', +p.dataset.i===i));
+  if(learnMode) learnHelp.textContent = i===null ? 'Click a drum here, then hit a pad on your MPK. Press Done when finished.' : `Now hit the MPK pad you want for "${DRUMS[i]}".`;
+}
+learnBtn.onclick = ()=>{
+  learnMode = !learnMode;
+  learnBtn.textContent = learnMode ? 'Done' : 'Learn pads'; learnBtn.classList.toggle('on', learnMode);
+  document.body.classList.toggle('learning', learnMode);
+  setLearn(null); if(!learnMode) learnHelp.textContent = LEARN_IDLE;
+};
+function savePads(){ try{ localStorage.setItem('mpk-padmap', JSON.stringify(padMap)); }catch(_){} }
+document.getElementById('resetpads').onclick = ()=>{ padMap = {}; savePads(); };
+const kc = document.getElementById('keysch');
+for(let c=1;c<=16;c++) kc.add(new Option('Ch '+c, c));
+try{ kc.value = localStorage.getItem('mpk-keysch') || '1'; }catch(_){ kc.value='1'; }
+kc.onchange = ()=>{ try{ localStorage.setItem('mpk-keysch', kc.value); }catch(_){} };
 const knobsEl = document.getElementById('knobs');
 KNOBS.forEach(([k,label],i)=>{ const d = document.createElement('div'); d.className='knob'; d.innerHTML=`<div class="ring" id="k${i}"></div>${label}<small>K${i+1} · CC${70+i}</small>`; knobsEl.appendChild(d); });
 function setKnob(i, v){ P[KNOBS[i][0]] = v; document.getElementById('k'+i).style.setProperty('--p', (v*100)+'%'); applyParams(); }
