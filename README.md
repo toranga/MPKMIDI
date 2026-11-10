@@ -4,6 +4,8 @@ A browser-based synth and drum player for the **AKAI MPK mini**, built on the We
 
 ## Use it
 
+**Live version:** https://toranga.github.io/MPKMIDI/ (open in Chrome or Edge)
+
 1. Plug the MPK mini into your computer over USB.
 2. Open `index.html` in **Chrome** or **Edge**. Safari doesn't support Web MIDI, and Firefox needs an add-on.
 3. Click **Start**, then **Allow** MIDI access when the browser asks.
