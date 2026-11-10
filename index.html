@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MPK Mini Player</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{--bg:#141518;--panel:#1d1f24;--line:#2c2f36;--txt:#e8e8ea;--dim:#8b8f98;--acc:#e5484d;--ok:#3dd68c}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--txt)}
+  header{display:flex;align-items:center;gap:16px;padding:16px 24px;border-bottom:1px solid var(--line)}
+  h1{font-size:18px;margin:0;letter-spacing:.5px}
+  #status{display:flex;align-items:center;gap:8px;color:var(--dim)}
+  .dot{width:10px;height:10px;border-radius:50%;background:#555}
+  .dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  button,select{background:var(--panel);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:8px 12px;font:inherit;cursor:pointer}
+  button.primary{background:var(--acc);border-color:var(--acc);font-weight:600}
+  main{display:grid;grid-template-columns:1fr 320px;gap:20px;padding:20px 24px;max-width:1200px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);margin:0 0 12px}
+  .row{display:flex;gap:20px;flex-wrap:wrap}
+  #pads{display:grid;grid-template-columns:repeat(4,72px);gap:10px}
+  .pad{height:72px;border-radius:8px;background:#2a2d34;border:1px solid #383c45;display:flex;align-items:flex-end;justify-content:center;padding:6px;font-size:11px;color:var(--dim);user-select:none;cursor:pointer;transition:background .05s}
+  .pad.hit{background:var(--acc);color:#fff}
+  #knobs{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;flex:1;min-width:280px}
+  .knob{text-align:center}
+  .knob .ring{width:54px;height:54px;margin:0 auto 6px;border-radius:50%;background:conic-gradient(var(--acc) var(--p,0%),#2a2d34 0)}
+  .knob .ring::after{content:"";display:block;width:40px;height:40px;margin:7px;border-radius:50%;background:var(--panel)}
+  .knob small{display:block;color:var(--dim);font-size:11px}
+  #kb{position:relative;height:130px;margin-top:8px;user-select:none}
+  .wk,.bk{position:absolute;top:0;border-radius:0 0 5px 5px;cursor:pointer}
+  .wk{height:130px;background:#eee;border:1px solid #999}
+  .bk{height:80px;background:#111;z-index:2;border:1px solid #000}
+  .wk.on{background:#ffb3b5}.bk.on{background:var(--acc)}
+  #log{height:340px;overflow:auto;font:12px/1.5 ui-monospace,Consolas,monospace;color:#b9bcc3;white-space:pre}
+  label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:6px 0;color:var(--dim)}
+  #help{color:var(--dim);font-size:13px}
+  #overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:9}
+  #overlay .card{max-width:420px;text-align:center}
+</style>
+</head>
+<body>
+<div id="overlay"><div class="card">
+  <h1 style="margin-bottom:10px">MPK Mini Player</h1>
+  <p id="help">Plug in your MPK mini, then click Start. The browser will ask for permission to use MIDI devices — click Allow.<br><br>Works in Chrome or Edge (Firefox needs an add-on, Safari doesn't support Web MIDI).</p>
+  <button class="primary" id="start">Start</button>
+</div></div>
+
+<header>
+  <h1>MPK Mini Player</h1>
+  <div id="status"><span class="dot" id="dot"></span><span id="devname">No MIDI device</span></div>
+  <span style="flex:1"></span>
+  <label style="margin:0">Sound
+    <select id="wave">
+      <option value="sawtooth">Saw lead</option>
+      <option value="square">Square</option>
+      <option value="triangle">Soft (triangle)</option>
+      <option value="sine">Sine</option>
+      <option value="epiano">E-piano</option>
+    </select>
+  </label>
+</header>
+
+<main>
+  <div style="display:flex;flex-direction:column;gap:20px">
+    <div class="row">
+      <div class="card"><h2>Pads (drums)</h2><div id="pads"></div></div>
+      <div class="card" style="flex:1"><h2>Knobs</h2><div id="knobs"></div></div>
+    </div>
+    <div class="card"><h2>Keys</h2><div id="kb"></div>
+      <p id="help" style="margin:10px 0 0">Use the Oct −/+ buttons on the MPK to shift range. Joystick X = pitch bend, joystick Y / mod = vibrato. Sustain pedal works too. You can also click the pads and keys with the mouse.</p>
+    </div>
+  </div>
+  <div class="card"><h2>MIDI monitor</h2><div id="log"></div>
+    <button id="clear" style="margin-top:10px">Clear</button>
+  </div>
+</main>
+
+<script>
+// ---------- audio setup ----------
+let ctx, master, filter, comp, delay, delayGain;
+const P = { cutoff:0.7, reso:0.2, attack:0.02, release:0.3, delayMix:0.15, drumVol:0.9, synthVol:0.6, detune:0.15 };
+const KNOBS = [
+  ['cutoff','Filter'],['reso','Resonance'],['attack','Attack'],['release','Release'],
+  ['detune','Detune'],['delayMix','Delay'],['synthVol','Synth vol'],['drumVol','Drum vol']
+];
+let bend = 0, mod = 0, sustain = false;
+const voices = new Map(); // note -> voice
+const sustained = new Set();
+
+function initAudio(){
+  ctx = new (window.AudioContext||window.webkitAudioContext)();
+  comp = ctx.createDynamicsCompressor();
+  master = ctx.createGain(); master.gain.value = 0.8;
+  filter = ctx.createBiquadFilter(); filter.type='lowpass';
+  delay = ctx.createDelay(1); delay.delayTime.value = 0.3;
+  const fb = ctx.createGain(); fb.gain.value = 0.35;
+  delayGain = ctx.createGain();
+  filter.connect(master);
+  filter.connect(delay); delay.connect(fb); fb.connect(delay); delay.connect(delayGain); delayGain.connect(master);
+  master.connect(comp); comp.connect(ctx.destination);
+  applyParams();
+}
+function applyParams(){
+  if(!ctx) return;
+  const t = ctx.currentTime;
+  filter.frequency.setTargetAtTime(80*Math.pow(2, P.cutoff*8), t, 0.02);
+  filter.Q.setTargetAtTime(0.5 + P.reso*18, t, 0.02);
+  delayGain.gain.setTargetAtTime(P.delayMix*0.8, t, 0.02);
+}
+const mtof = n => 440*Math.pow(2,(n-69)/12);
+
+// ---------- synth ----------
+function noteOn(note, vel){
+  if(!ctx) return;
+  noteOff(note, true);
+  const t = ctx.currentTime, wave = document.getElementById('wave').value;
+  const g = ctx.createGain(); g.gain.value = 0;
+  const amp = (vel/127) * P.synthVol * 0.35;
+  const oscs = [];
+  const mk = (type, det, mult=1) => { const o = ctx.createOscillator(); o.type=type; o.frequency.value = mtof(note)*mult; o.detune.value = det + bend*200; o.connect(g); o.start(t); oscs.push(o); return o; };
+  if(wave==='epiano'){
+    mk('sine',0); const o2 = mk('sine',0,2); 
+    const g2 = ctx.createGain(); o2.disconnect(); o2.connect(g2); g2.connect(g); g2.gain.setValueAtTime(0.5,t); g2.gain.exponentialRampToValueAtTime(0.01,t+1.2);
+    g.gain.setValueAtTime(amp*1.4,t); g.gain.exponentialRampToValueAtTime(amp*0.3,t+1.5);
+  } else {
+    mk(wave, -P.detune*25); mk(wave, P.detune*25);
+    g.gain.linearRampToValueAtTime(amp, t + 0.003 + P.attack*1.5);
+  }
+  // vibrato
+  const lfo = ctx.createOscillator(), lg = ctx.createGain();
+  lfo.frequency.value = 5.5; lg.gain.value = mod*40; lfo.connect(lg); oscs.forEach(o=>lg.connect(o.detune)); lfo.start(t);
+  g.connect(filter);
+  voices.set(note, {g, oscs, lfo, lg});
+  keyVis(note, true);
+}
+function noteOff(note, immediate=false){
+  const v = voices.get(note); if(!v) return;
+  if(sustain && !immediate){ sustained.add(note); keyVis(note,false); return; }
+  const t = ctx.currentTime, rel = immediate ? 0.01 : 0.02 + P.release*2.5;
+  v.g.gain.cancelScheduledValues(t); v.g.gain.setValueAtTime(v.g.gain.value, t);
+  v.g.gain.exponentialRampToValueAtTime(0.0001, t+rel);
+  [...v.oscs, v.lfo].forEach(o=>o.stop(t+rel+0.05));
+  voices.delete(note); sustained.delete(note); keyVis(note,false);
+}
+function updateBend(){ voices.forEach(v=>v.oscs.forEach((o,i)=>{ const base = v.oscs.length===2 && document.getElementById('wave').value!=='epiano' ? (i?1:-1)*P.detune*25 : 0; o.detune.setTargetAtTime(base + bend*200, ctx.currentTime, 0.01); })); }
+function updateMod(){ voices.forEach(v=>v.lg.gain.setTargetAtTime(mod*40, ctx.currentTime, 0.02)); }
+
+// ---------- drums (synthesized, no samples needed) ----------
+const DRUMS = ['Kick','Snare','Closed hat','Open hat','Clap','Low tom','Hi tom','Rim','Kick 2','Snare 2','Shaker','Crash','Cowbell','Mid tom','Perc','Zap'];
+let noiseBuf;
+function noise(){ if(!noiseBuf){ noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate); const d = noiseBuf.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1; } const s = ctx.createBufferSource(); s.buffer=noiseBuf; return s; }
+function env(node, t, peak, dur){ const g = ctx.createGain(); g.gain.setValueAtTime(peak,t); g.gain.exponentialRampToValueAtTime(0.001,t+dur); node.connect(g); return g; }
+function tone(t, f0, f1, dur, vol, type='sine'){ const o = ctx.createOscillator(); o.type=type; o.frequency.setValueAtTime(f0,t); o.frequency.exponentialRampToValueAtTime(f1,t+dur*0.6); env(o,t,vol,dur).connect(comp); o.start(t); o.stop(t+dur+0.05); }
+function nz(t, type, freq, dur, vol, q=1){ const s = noise(), f = ctx.createBiquadFilter(); f.type=type; f.frequency.value=freq; f.Q.value=q; s.connect(f); env(f,t,vol,dur).connect(comp); s.start(t); s.stop(t+dur+0.05); }
+function drum(i, vel){
+  if(!ctx) return;
+  const t = ctx.currentTime, v = (vel/127)*P.drumVol;
+  switch(i%16){
+    case 0: tone(t,150,45,0.45,v*1.2); break;
+    case 1: tone(t,220,160,0.12,v*0.5,'triangle'); nz(t,'highpass',1500,0.18,v*0.6); break;
+    case 2: nz(t,'highpass',8000,0.05,v*0.4); break;
+    case 3: nz(t,'highpass',7000,0.35,v*0.35); break;
+    case 4: [0,0.01,0.02].forEach(d=>nz(t+d,'bandpass',1200,0.15,v*0.5,2)); break;
+    case 5: tone(t,140,80,0.35,v*0.8); break;
+    case 6: tone(t,260,160,0.25,v*0.7); break;
+    case 7: tone(t,1700,1600,0.03,v*0.4,'square'); nz(t,'bandpass',2500,0.03,v*0.3,3); break;
+    case 8: tone(t,90,35,0.7,v*1.2); tone(t,1000,200,0.01,v*0.3,'square'); break;
+    case 9: tone(t,300,200,0.08,v*0.4,'triangle'); nz(t,'bandpass',4000,0.22,v*0.6,0.7); break;
+    case 10: nz(t,'bandpass',6000,0.08,v*0.35,1.5); break;
+    case 11: nz(t,'highpass',5000,1.2,v*0.35); break;
+    case 12: tone(t,560,560,0.25,v*0.25,'square'); tone(t,845,845,0.25,v*0.25,'square'); break;
+    case 13: tone(t,200,120,0.3,v*0.75); break;
+    case 14: tone(t,800,400,0.1,v*0.5,'triangle'); break;
+    case 15: tone(t,2000,60,0.2,v*0.5,'sawtooth'); break;
+  }
+  const el = document.querySelector(`.pad[data-i="${i%16}"]`);
+  if(el){ el.classList.add('hit'); setTimeout(()=>el.classList.remove('hit'),120); }
+}
+
+// ---------- MIDI ----------
+// MPK mini mk3 defaults: keys ch1, pads ch10 notes 36-51 (bank A 36-43, bank B 44-51),
+// knobs CC70-77, sustain CC64, joystick = pitch bend (X) / CC1 (Y). mk2 pads also send notes ~36+ on ch10.
+const PAD_BASE = 36;
+function handleMIDI(e){
+  const [st, d1, d2] = e.data, cmd = st & 0xf0, ch = (st & 0x0f) + 1;
+  log(e.data, ch);
+  if(cmd===0x90 && d2>0){
+    if(ch===10) drum(d1 - PAD_BASE < 0 ? d1 : d1 - PAD_BASE, d2); else noteOn(d1, d2);
+  } else if(cmd===0x80 || (cmd===0x90 && d2===0)){
+    if(ch!==10) noteOff(d1);
+  } else if(cmd===0xB0){
+    if(d1===64){ sustain = d2>=64; if(!sustain) [...sustained].forEach(n=>{ noteOff(n); }); }
+    else if(d1===1){ mod = d2/127; updateMod(); }
+    else if(d1>=70 && d1<=77){ setKnob(d1-70, d2/127); }
+  } else if(cmd===0xE0){
+    bend = (((d2<<7)|d1) - 8192)/8192; updateBend();
+  }
+}
+const NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const nn = n => NAMES[n%12] + (Math.floor(n/12)-1);
+const logEl = document.getElementById('log'); let lines = [];
+function log(d, ch){
+  const cmd = d[0]&0xf0; let s;
+  if(cmd===0x90 && d[2]>0) s = `NoteOn   ch${ch}  ${nn(d[1]).padEnd(4)} (${d[1]})  vel ${d[2]}`;
+  else if(cmd===0x80 || cmd===0x90) s = `NoteOff  ch${ch}  ${nn(d[1]).padEnd(4)} (${d[1]})`;
+  else if(cmd===0xB0) s = `CC       ch${ch}  #${d[1]}  = ${d[2]}`;
+  else if(cmd===0xE0) s = `Bend     ch${ch}  ${((d[2]<<7)|d[1])-8192}`;
+  else if(cmd===0xC0) s = `Program  ch${ch}  ${d[1]}`;
+  else s = [...d].map(x=>x.toString(16).padStart(2,'0')).join(' ');
+  lines.push(s); if(lines.length>200) lines.shift();
+  logEl.textContent = lines.join('\n'); logEl.scrollTop = logEl.scrollHeight;
+}
+document.getElementById('clear').onclick = ()=>{ lines=[]; logEl.textContent=''; };
+
+async function initMIDI(){
+  if(!navigator.requestMIDIAccess){ document.getElementById('devname').textContent = 'This browser has no Web MIDI — use Chrome or Edge'; return; }
+  try{
+    const access = await navigator.requestMIDIAccess();
+    const bind = ()=>{
+      const ins = [...access.inputs.values()];
+      ins.forEach(i=>i.onmidimessage = handleMIDI);
+      document.getElementById('dot').classList.toggle('on', ins.length>0);
+      document.getElementById('devname').textContent = ins.length ? ins.map(i=>i.name).join(', ') : 'No MIDI device — plug in the MPK mini';
+    };
+    bind(); access.onstatechange = bind;
+  }catch(err){ document.getElementById('devname').textContent = 'MIDI permission denied: ' + err.message; }
+}
+
+// ---------- UI ----------
+const padsEl = document.getElementById('pads');
+// MPK layout: bottom row = pads 1-4, so render top row first
+[4,5,6,7,0,1,2,3].forEach(i=>{ const d = document.createElement('div'); d.className='pad'; d.dataset.i=i; d.textContent=DRUMS[i]; d.onpointerdown=()=>drum(i,110); padsEl.appendChild(d); });
+const knobsEl = document.getElementById('knobs');
+KNOBS.forEach(([k,label],i)=>{ const d = document.createElement('div'); d.className='knob'; d.innerHTML=`<div class="ring" id="k${i}"></div>${label}<small>K${i+1} · CC${70+i}</small>`; knobsEl.appendChild(d); });
+function setKnob(i, v){ P[KNOBS[i][0]] = v; document.getElementById('k'+i).style.setProperty('--p', (v*100)+'%'); applyParams(); }
+KNOBS.forEach(([k],i)=>setKnob(i, P[k]));
+
+// on-screen keyboard: 3 octaves from C3 (48)
+const kb = document.getElementById('kb'); const LOW = 48, HIGH = 84; const keyEls = {};
+let wx = 0; const W = 32;
+for(let n=LOW;n<=HIGH;n++){ const black = [1,3,6,8,10].includes(n%12); const el = document.createElement('div');
+  if(black){ el.className='bk'; el.style.left=(wx*W - 10)+'px'; el.style.width='20px'; }
+  else { el.className='wk'; el.style.left=(wx*W)+'px'; el.style.width=W+'px'; wx++; }
+  el.onpointerdown = ()=>noteOn(n,100); el.onpointerup = el.onpointerleave = ()=>noteOff(n);
+  kb.appendChild(el); keyEls[n]=el; }
+kb.style.width = (wx*W)+'px';
+function keyVis(n,on){ const el = keyEls[n]; if(el) el.classList.toggle('on',on); }
+
+document.getElementById('start').onclick = async ()=>{ initAudio(); await ctx.resume(); await initMIDI(); document.getElementById('overlay').remove(); };
+</script>
+</body>
+</html>
